@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/version: "0.7.0-dev"
   annotations:
-    tekton.dev/pipelines.minVersion: "0.24.x"
+    tekton.dev/pipelines.minVersion: "0.44.x"
     tekton.dev/categories: infrastructure
     tekton.dev/tags: infrastructure, aws, rhel
     tekton.dev/displayName: "aws manager"
@@ -19,6 +19,7 @@ spec:
 
   workspaces:
     - name: storage
+      optional: true
       description: volume to store outputs to connect within the target machine + state file for the infrastructure 
       mountPath: /opt/storage
     - name: aws-credentials
@@ -68,6 +69,7 @@ spec:
       default: "''"
     - name: ws-output-path
       description: path on workspace where to store ephemeral assets related with the provisioning
+      default: "''"
     - name: operation 
       description: operation to execute within the infrastructure. Current values (create, destroy)
 
@@ -135,12 +137,16 @@ spec:
       description: username to connect to the provisioned machine
     - name: key
       description: filename for the private key. The key is located at workspace-resources-path
+    - name: id-rsa-base64
+      description: content for the private key to connect to the target environment as base64
     - name: bastion-host
       description: if airgap is set we get the bastion host as result
     - name: bastion-username
       description: if airgap is set we get the bastion username to connect as result
     - name: bastion-key
       description: if airgap is set we get the bastion filename for the private key. The key is located at workspace-resources-path
+    - name: bastion-id-rsa-base64
+      description: content for the private key to connect to the bastion as base64
 
   steps:
     - name: provisioner
@@ -160,7 +166,10 @@ spec:
         export AWS_DEFAULT_REGION=$(cat /opt/aws-credentials/region)
 
         # Output folder
-        workspace_path=/opt/storage/$(params.ws-output-path)
+        workspace_path="/opt/storage"
+        if [ ! -d "/opt/storage" ]; then
+          workspace_path+="/$(params.ws-output-path)"
+        fi
         mkdir -p ${workspace_path}
 
         # Remove lock
@@ -212,10 +221,12 @@ spec:
         cat "${workspace_path}/host" | tee $(results.host.path)
         cat "${workspace_path}/username" | tee $(results.username.path)   
         echo -n "id_rsa" | tee $(results.key.path)   
+        cat "${workspace_path}/id_rsa" | base64 | tee $(results.id-rsa-base64.path) 
         if [[ $(params.airgap) == "true" ]]; then
           cat "${workspace_path}/bastion_host" | tee $(results.bastion-host.path)
           cat "${workspace_path}/bastion_username" | tee $(results.bastion-username.path)   
           echo -n "bastion_id_rsa" | tee $(results.bastion-key.path)   
+          cat "${workspace_path}/bastion_id_rsa" | base64 | tee $(results.bastion-id-rsa-base64.path)   
         fi
 
         # If debug print credentials

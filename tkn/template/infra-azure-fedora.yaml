@@ -18,8 +18,10 @@ spec:
     The output will give required information to connect within the remote provisioned host
 
   workspaces:
-    - name: pipelines-data
-      description: workspace to store outputs to connect within the target machine + state file for the infrastructure 
+    - name: storage
+      optional: true
+      description: volume to store outputs to connect within the target machine + state file for the infrastructure 
+      mountPath: /opt/storage 
     - name: az-credentials
       description: |
         ocp secret holding the azure credentials. Secret should be accessible to this task.
@@ -45,6 +47,7 @@ spec:
       default: "''"
     - name: ws-output-path
       description: path on workspace where to store ephemeral assets related with the provisioning
+      default: "''"
     - name: operation
       description: operation to execute within the infrastructure. Current values (create, destroy)
       default: create
@@ -94,6 +97,8 @@ spec:
       description: username to connect to the provisioned machine
     - name: key
       description: filename for the private key. The key is located at ws-output-path
+    - name: id-rsa-base64
+      description: content for the private key to connect to the target environment as base64
 
   steps:
     - name: provisioner
@@ -118,7 +123,10 @@ spec:
         fi
 
         # Output folder
-        workspace_path=$(workspaces.pipelines-data.path)/$(params.ws-output-path)
+        workspace_path="/opt/storage"
+        if [ ! -d "/opt/storage" ]; then
+          workspace_path+="/$(params.ws-output-path)"
+        fi
         mkdir -p ${workspace_path}
 
         # Remove lock
@@ -162,6 +170,7 @@ spec:
         cat "${workspace_path}/host" | tee $(results.host.path)
         cat "${workspace_path}/username" | tee $(results.username.path)   
         echo -n "id_rsa" | tee $(results.key.path)
+        cat "${workspace_path}/id_rsa" | base64 | tee $(results.id-rsa-base64.path)    
 
         if [[ ${create_exit_code} -ne 0 ]]; then 
           exit 1
