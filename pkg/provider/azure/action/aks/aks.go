@@ -86,8 +86,7 @@ func (r *AKSRequest) deployer(ctx *pulumi.Context) error {
 		ctx,
 		resourcesUtil.GetResourceName(r.Prefix, azureAKSID, "privatekey"),
 		&tls.PrivateKeyArgs{
-			Algorithm: pulumi.String("RSA"),
-			RsaBits:   pulumi.Int(4096),
+			Algorithm: pulumi.String("ECDSA"),
 		})
 	if err != nil {
 		return err

@@ -212,8 +212,9 @@ func (r *WindowsRequest) postInitSetup(ctx *pulumi.Context, rg *resources.Resour
 		ctx,
 		resourcesUtil.GetResourceName(r.Prefix, azureWindowsDesktopID, "privatekey-user"),
 		&tls.PrivateKeyArgs{
-			Algorithm: pulumi.String("RSA"),
-			RsaBits:   pulumi.Int(4096),
+			Algorithm: pulumi.String("ECDSA"),
+			// Algorithm: pulumi.String("RSA"),
+			// RsaBits:   pulumi.Int(4096),
 		})
 	if err != nil {
 		return nil, nil, err
