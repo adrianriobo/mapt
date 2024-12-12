@@ -7,6 +7,7 @@ const (
 	awsMacMachineID = "amm"
 
 	customResourceTypeLock = "rh:qe:aws:mac:lock"
+	customResourceTypeKey  = "rh:mapt:aws:mac:key"
 
 	outputLock              = "ammLock"
 	outputHost              = "ammHost"
@@ -20,7 +21,7 @@ const (
 
 	amiRegex         = "amzn-ec2-macos-%s*"
 	archDefault      = "m2"
-	osVersionDefault = "14"
+	osVersionDefault = "15"
 
 	vncDefaultPort  int    = 5900
 	diskSize        int    = 100
