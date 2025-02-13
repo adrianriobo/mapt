@@ -2,9 +2,9 @@
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
-  name: infra-azure-rhel
+  name: infra-azure-aks
   labels:
-    app.kubernetes.io/version: "<VERSION>"
+    app.kubernetes.io/version: "0.8.0-dev"
   annotations:
     tekton.dev/pipelines.minVersion: "0.44.x"
     tekton.dev/categories: infrastructure
@@ -13,18 +13,18 @@ metadata:
     tekton.dev/platforms: "linux/amd64, linux/arm64"
 spec:
   description: |
-    This task will provision / decomission rhel on azure
+    This task will provision / decomission azure aks cluster
 
-    The output will give required information to connect within the remote provisioned host
+    The output will give required information to connect within the remote provisioned cluster
 
   volumes:
     - name: az-credentials
       secret:
         secretName: $(params.secret-az-credentials)
-    - name: host-info
+    - name: ckuster-info
       emptyDir: {}
 
-  params: 
+  params:
     - name: secret-az-credentials
       description: |
         ocp secret holding the azure credentials. Secret should be accessible to this task.
@@ -69,43 +69,30 @@ spec:
         This should either be passed the value of `$(context.pipelineRun.uid)`
         or `$(context.taskRun.uid)` depending on the value of `ownerKind`.
 
-    # VM type params
-    - name: arch
-      description: Architecture for the machine. Allowed x86_64 or arm64 (default "x86_64")
-      default: 'x86_64'
-    - name: cpus 
-      description: Number of CPUs for the cloud instance (default 8)
-      default: '8'
-    - name: memory
-      description: Amount of RAM for the cloud instance in GiB (default 64)
-      default: '64'
-    - name: nested-virt
-      description: Use cloud instance that has nested virtualization support
+    # AKS params
+    - name: k8s-version
+      description: AKS K8s cluster version (default "1.30")
+      default: '1.30'
+    - name: only-system-pool
+      description: if we do not need bunch of resources we can run only the systempool. More info https://learn.microsoft.com/es-es/azure/aks/use-system-pools?tabs=azure-cli#system-and-user-node-pools. (default false)
       default: 'false'
-    - name: vmsize
-      description: size for the machine
-      default: "''"
+    - name: enable-app-routing
+      description: enable application routing add-on with NGINX. (default false)
+      default: 'false'
+
+    # VM type params for pools
     - name: spot
-      description: in case spot is set to true it will check for best spot price and create the VM on the target region
+      description: in case spot is set to true it 'ill check for best spot price and create the VM on the target region
       default: 'true'
     - name: spot-eviction-tolerance
       description: 'if spot is enable we can define the minimum tolerance level of eviction. Allowed value are: lowest, low, medium, high or highest'
       default: 'lowest'
 
-    # RHEL params
-    - name: version
-      description: this task will spin a RHEL image. This param will set the version for it. Default 9.4.
-      default: '9.4'
-    - name: profile-snc
-      description: |
-        This param will setup RHEL with SNC profile. Setting up all requirements to run https://github.com/crc-org/snc
-      default: 'false'
-    
     # Metadata params
     - name: tags
       description: tags for the resources created on the providers
       default: "''"
-    
+
     # Control params
     - name: debug
       description: |
@@ -114,11 +101,11 @@ spec:
         The parameter is intended to add verbosity on the task execution and also print credentials on stdout
         to easily access to remote machice
       default: 'false'
-  
+    
   results:
-    - name: host-access-secret
+    - name: cluster-access-secret
       description: |
-        ocp secret holding the information to connect with the target machine.
+        ocp secret holding the information to connect to the cluster
 
           ---
           apiVersion: v1
@@ -127,19 +114,17 @@ spec:
             name: ${name}
           type: Opaque
           data:
-            host: ${host}
-            username: ${username}
-            id_rsa: ${id_rsa}
+            kubeconfig: ${kubeconfig}
 
   steps:
     - name: provisioner
-      image: <IMAGE>
+      image: quay.io/redhat-developer/mapt:v0.8.0-dev
       imagePullPolicy: Always
       volumeMounts:
         - name: az-credentials
           mountPath: /opt/az-credentials
-        - name: host-info
-          mountPath: /opt/host-info
+        - name: cluster-info
+          mountPath: /opt/cluster-info
       script: |
         #!/bin/sh
 
@@ -157,27 +142,27 @@ spec:
         export AZURE_STORAGE_KEY=$(cat /opt/az-credentials/storage_key)
         BLOB=$(cat /opt/az-credentials/blob)
 
+        
         # Run mapt
-        cmd="mapt azure rhel $(params.operation) "
-        cmd+="--project-name mapt-rhel-$(params.id) "
-        cmd+="--backed-url azblob://${BLOB}/rhel-$(params.id) "
+        cmd="mapt azure aks $(params.operation) "
+        cmd+="--project-name mapt-aks-$(params.id) "
+        cmd+="--backed-url azblob://${BLOB}/aks-$(params.id) "
         if [[ $(params.operation) == "create" ]]; then
-          cmd+="--conn-details-output /opt/host-info "
-          cmd+="--arch $(params.arch) --cpus $(params.cpus) "
-          cmd+="--memory $(params.memory) --version $(params.version) "
-          if [[ $(params.nested-virt) == "true" ]]; then
-            cmd+="--nested-virt "
+          cmd+="--conn-details-output /opt/cluster-info "
+          cmd+="--version $(params.k8s-version) "
+          if [[ $(params.only-system-pool) == "true" ]]; then
+            cmd+="--only-system-pool "
           fi
-          if [[ $(params.vmsize) != "" ]]; then
-            cmd+="--vmsize $(params.vmsize) "
+          if [[ $(params.enable-app-routing) == "true" ]]; then
+            cmd+="--enable-app-routing "
           fi
-          if [[ $(params.spot) == "true" ]]; then cmd+="--spot "; fi
-          # Spot tolerance only be applied if spot is enabled
-          cmd+="--spot-eviction-tolerance $(params.spot-eviction-tolerance) "
+          if [[ $(params.spot) == "true" ]]; then
+            cmd+="--spot --spot-eviction-tolerance $(params.spot-eviction-tolerance) "
+          fi
           cmd+="--tags $(params.tags) "
         fi
         eval "${cmd}"
-      resources:      
+      resources:
         requests:
           memory: "200Mi"
           cpu: "100m"
@@ -196,17 +181,17 @@ spec:
         - name: OWNER_UID
           value: $(params.ownerUid)  
       volumeMounts:
-        - name: host-info
-          mountPath: /opt/host-info
+        - name: cluster-info
+          mountPath: /opt/cluster-info
       script: |
         #!/bin/bash
         set -eo pipefail
         if [[ $(params.operation) == "create" ]]; then
-        cat <<EOF > host-info.yaml
+        cat <<EOF > cluster-info.yaml
         apiVersion: v1
         kind: Secret
         metadata:
-          generateName: mapt-azure-rhel-
+          generateName: mapt-azure-aks-
           namespace: $NAMESPACE
           ownerReferences:
           - apiVersion: tekton.dev/v1
@@ -215,15 +200,13 @@ spec:
             uid: $OWNER_UID
         type: Opaque
         data:
-          host: $(cat /opt/host-info/host | base64 -w0)
-          username: $(cat /opt/host-info/username | base64 -w0)
-          id_rsa: $(cat /opt/host-info/id_rsa | base64 -w0)
+          kubeconfig: $(cat /opt/cluster-info/kubeconfig | base64 -w0)
         EOF
 
         if [[ $(params.debug) == "true" ]]; then
-          cat /opt/host-info/*
+          cat /opt/cluster-info/*
         fi
         
-        NAME=$(oc create -f host-info.yaml -o=jsonpath='{.metadata.name}')
-        echo -n "${NAME}" | tee $(results.host-access-secret.path)   
+        NAME=$(oc create -f cluster-info.yaml -o=jsonpath='{.metadata.name}')
+        echo -n "${NAME}" | tee $(results.cluster-access-secret.path)   
         fi
