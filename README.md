@@ -1,4 +1,6 @@
-# mapt (Multi Architecture Provisionig Tool)
+# ![mapt](./docs/logo/mapt.svg) Multi Architecture Provisioning Tool 
+
+![code check](https://github.com/redhat-developer/mapt/actions/workflows/build-go.yaml/badge.svg)![oci builds](https://github.com/redhat-developer/mapt/actions/workflows/build-oci.yaml/badge.svg)
 
 Mapt is a swiss army knife for provisioning environments, it could be used across multiple CI/CD systems:
 
@@ -18,8 +20,7 @@ About the target environments offered it is not limited to a single machine or s
 * VPN emulation (Coming... )
 * Domain Controller integration (Coming... )
 
-![code check](https://github.com/redhat-developer/mapt/actions/workflows/build-go.yaml/badge.svg)
-![oci builds](https://github.com/redhat-developer/mapt/actions/workflows/build-oci.yaml/badge.svg)
+
 
 ## Supported environments
 
