@@ -1,7 +1,6 @@
-package windows
+package rhelai
 
 import (
-	_ "embed"
 	"fmt"
 
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2"
@@ -16,7 +15,6 @@ import (
 	"github.com/redhat-developer/mapt/pkg/provider/aws/data"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/allocation"
 	amiCopy "github.com/redhat-developer/mapt/pkg/provider/aws/modules/ami"
-	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/bastion"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/ec2/compute"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/network"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/serverless"
@@ -24,68 +22,43 @@ import (
 	amiSVC "github.com/redhat-developer/mapt/pkg/provider/aws/services/ec2/ami"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/services/ec2/keypair"
 	securityGroup "github.com/redhat-developer/mapt/pkg/provider/aws/services/ec2/security-group"
-	cloudConfigWindowsServer "github.com/redhat-developer/mapt/pkg/provider/util/cloud-config/windows-server"
 	"github.com/redhat-developer/mapt/pkg/provider/util/command"
 	"github.com/redhat-developer/mapt/pkg/provider/util/output"
-	"github.com/redhat-developer/mapt/pkg/provider/util/security"
 	"github.com/redhat-developer/mapt/pkg/util"
 	"github.com/redhat-developer/mapt/pkg/util/logging"
 	resourcesUtil "github.com/redhat-developer/mapt/pkg/util/resources"
 )
 
-// add proxy https://github.com/ptcodes/proxy-server-with-terraform/blob/master/main.tf
-type WindowsServerArgs struct {
-	Prefix string
-	// AMI info. Optional. User and Owner only applied
-	// if AMIName is set
-	AMIName     string
-	AMIUser     string
-	AMIOwner    string
-	AMILang     string
-	AMIKeepCopy bool
-	// Machine params
+type RHELAIArgs struct {
+	Prefix         string
+	Version        string
+	Arch           string
 	ComputeRequest *cr.ComputeRequestArgs
+	SubsUsername   string
+	SubsUserpass   string
 	Spot           bool
-	Airgap         bool
 	// If timeout is set a severless scheduled task will be created to self destroy the resources
 	Timeout string
 }
 
-type windowsServerRequest struct {
-	prefix *string
-
-	amiName     *string
-	amiUser     *string
-	amiOwner    *string
-	amiLang     *string
-	amiKeepCopy *bool
-
+type rhelAIRequest struct {
+	prefix         *string
+	version        *string
+	arch           *string
 	spot           *bool
+	subsUsername   *string
+	subsUserpass   *string
 	timeout        *string
 	allocationData *allocation.AllocationData
-	airgap         *bool
-	// internal management
-	// For airgap scenario there is an orchestation of
-	// a phase with connectivity on the machine (allowing bootstraping)
-	// a pahase with connectivyt off where the subnet for the target lost the nat gateway
-	airgapPhaseConnectivity network.Connectivity
 }
 
-// Create orchestrate 3 stacks:
+// Create orchestrate 2 stacks:
 // If spot is enable it will run best spot option to get the best option to spin the machine
 // Then it will run the stack for windows dedicated host
-func Create(ctx *maptContext.ContextArgs, args *WindowsServerArgs) error {
+func Create(ctx *maptContext.ContextArgs, args *RHELAIArgs) error {
 	// Create mapt Context
 	if err := maptContext.Init(ctx, aws.Provider()); err != nil {
 		return err
-	}
-	if len(args.AMIName) == 0 {
-		args.AMIName = amiNameDefault
-		args.AMIUser = amiUserDefault
-		args.AMIOwner = amiOwnerDefault
-	}
-	if len(args.AMILang) > 0 && args.AMILang == amiLangNonEng {
-		args.AMIName = amiNonEngNameDefault
 	}
 	// Get instance types matching requirements
 	instanceTypes, err :=
@@ -98,16 +71,14 @@ func Create(ctx *maptContext.ContextArgs, args *WindowsServerArgs) error {
 	}
 	// Compose request
 	prefix := util.If(len(args.Prefix) > 0, args.Prefix, "main")
-	r := windowsServerRequest{
-		prefix:      &prefix,
-		amiName:     &args.AMIName,
-		amiUser:     &args.AMIUser,
-		amiOwner:    &args.AMIOwner,
-		amiKeepCopy: &args.AMIKeepCopy,
-		amiLang:     &args.AMILang,
-		spot:        &args.Spot,
-		timeout:     &args.Timeout,
-		airgap:      &args.Airgap}
+	r := rhelAIRequest{
+		prefix:       &prefix,
+		version:      &args.Version,
+		arch:         &args.Arch,
+		spot:         &args.Spot,
+		timeout:      &args.Timeout,
+		subsUsername: &args.SubsUsername,
+		subsUserpass: &args.SubsUserpass}
 	r.allocationData, err = util.IfWithError(args.Spot,
 		func() (*allocation.AllocationData, error) {
 			return allocation.AllocationDataOnSpot(
@@ -119,10 +90,10 @@ func Create(ctx *maptContext.ContextArgs, args *WindowsServerArgs) error {
 	if err != nil {
 		return err
 	}
-
+	amiRegex := fmt.Sprintf("%s*", amiName)
 	isAMIOffered, _, err := data.IsAMIOffered(
 		data.ImageRequest{
-			Name:   r.amiName,
+			Name:   &amiRegex,
 			Region: r.allocationData.Region})
 	if err != nil {
 		return err
@@ -131,29 +102,22 @@ func Create(ctx *maptContext.ContextArgs, args *WindowsServerArgs) error {
 	if !isAMIOffered {
 		acr := amiCopy.CopyAMIRequest{
 			Prefix:          *r.prefix,
-			ID:              awsWindowsDedicatedID,
-			AMISourceName:   r.amiName,
-			AMISourceArch:   nil,
+			ID:              awsRHELDedicatedID,
+			AMISourceName:   &amiName,
+			AMISourceArch:   &amiArch,
 			AMITargetRegion: r.allocationData.Region,
-			AMIKeepCopy:     *r.amiKeepCopy,
-			FastLaunch:      amiFastLaunch,
-			MaxParallel:     int32(amiFastLaunchMaxParallel),
+			AMIKeepCopy:     false,
 		}
 		if err := acr.Create(); err != nil {
 			return err
 		}
 	}
-	// if not only host the mac machine will be created
-	if !*r.airgap {
-		return r.createMachine()
-	}
-	// Airgap scneario requires orchestration
-	return r.createAirgapMachine()
+	return r.createMachine()
 }
 
 // Will destroy resources related to machine
-func Destroy(ctx *maptContext.ContextArgs) (err error) {
-	logging.Debug("Run windows destroy")
+func Destroy(ctx *maptContext.ContextArgs) error {
+	logging.Debug("Run rhel destroy")
 	// Create mapt Context
 	if err := maptContext.Init(ctx, aws.Provider()); err != nil {
 		return err
@@ -165,19 +129,13 @@ func Destroy(ctx *maptContext.ContextArgs) (err error) {
 		}); err != nil {
 		return err
 	}
-	if amiCopy.Exist() {
-		err = amiCopy.Destroy()
-		if err != nil {
-			return
-		}
-	}
 	if spot.Exist() {
 		return spot.Destroy()
 	}
 	return nil
 }
 
-func (r *windowsServerRequest) createMachine() error {
+func (r *rhelAIRequest) createMachine() error {
 	cs := manager.Stack{
 		StackName:   maptContext.StackNameByProject(stackName),
 		ProjectName: maptContext.ProjectName(),
@@ -188,23 +146,8 @@ func (r *windowsServerRequest) createMachine() error {
 		DeployFunc: r.deploy,
 	}
 
-	sr, err := manager.UpStack(cs)
-	if err != nil {
-		return err
-	}
-	return manageResults(sr, r.prefix, r.airgap)
-}
-
-// Abstract this with a stackAirgapHandle receives a fn (connectivty on / off) err executes
-// first on then off
-func (r *windowsServerRequest) createAirgapMachine() error {
-	r.airgapPhaseConnectivity = network.ON
-	err := r.createMachine()
-	if err != nil {
-		return nil
-	}
-	r.airgapPhaseConnectivity = network.OFF
-	return r.createMachine()
+	sr, _ := manager.UpStack(cs)
+	return r.manageResults(sr)
 }
 
 // function wil all the logic to deploy resources required by windows
@@ -214,36 +157,35 @@ func (r *windowsServerRequest) createAirgapMachine() error {
 // * security group
 // * compute
 // * checks
-func (r *windowsServerRequest) deploy(ctx *pulumi.Context) error {
-	// Get AMI ref
-	// ami, err := amiSVC.GetAMIByName(ctx, r.AMIName, r.AMIOwner, nil)
+func (r *rhelAIRequest) deploy(ctx *pulumi.Context) error {
+	// Get AMI
 	ami, err := amiSVC.GetAMIByName(ctx,
-		fmt.Sprintf("%s*", *r.amiName),
-		[]string{*r.amiOwner}, nil)
-
+		fmt.Sprintf("%s*", amiName),
+		[]string{amiOwnerSelf},
+		map[string]string{
+			"architecture": amiArch})
 	if err != nil {
 		return err
 	}
 	// Networking
+	lbEnable := true
 	nr := network.NetworkRequest{
 		Prefix: *r.prefix,
-		ID:     awsWindowsDedicatedID,
+		ID:     awsRHELDedicatedID,
 		Region: *r.allocationData.Region,
 		AZ:     *r.allocationData.AZ,
 		// LB is required if we use as which is used for spot feature
-		CreateLoadBalancer:      r.spot,
-		Airgap:                  *r.airgap,
-		AirgapPhaseConnectivity: r.airgapPhaseConnectivity,
+		CreateLoadBalancer: &lbEnable,
+		Airgap:             false,
 	}
-	// vpc, targetSubnet, targetRouteTableAssociation, bastion, lb, err := nr.Network(ctx)
-	vpc, targetSubnet, _, bastion, lb, lbEIP, err := nr.Network(ctx)
+	vpc, targetSubnet, _, _, lb, lbEIP, err := nr.Network(ctx)
 	if err != nil {
 		return err
 	}
 	// Create Keypair
 	kpr := keypair.KeyPairRequest{
 		Name: resourcesUtil.GetResourceName(
-			*r.prefix, awsWindowsDedicatedID, "pk")}
+			*r.prefix, awsRHELDedicatedID, "pk")}
 	keyResources, err := kpr.Create(ctx)
 	if err != nil {
 		return err
@@ -251,95 +193,71 @@ func (r *windowsServerRequest) deploy(ctx *pulumi.Context) error {
 	ctx.Export(fmt.Sprintf("%s-%s", *r.prefix, outputUserPrivateKey),
 		keyResources.PrivateKey.PrivateKeyPem)
 	// Security groups
-	securityGroups, err := securityGroups(ctx, r.prefix, vpc)
-	if err != nil {
-		return err
-	}
-	// Compute
-	password, err := security.CreatePassword(ctx,
-		resourcesUtil.GetResourceName(
-			*r.prefix, awsWindowsDedicatedID, "password"))
-	if err != nil {
-		return err
-	}
-	userDataB64, err := cloudConfigWindowsServer.Userdata(ctx, &amiUserDefault, password, keyResources)
+	securityGroups, err := r.securityGroups(ctx, vpc)
 	if err != nil {
 		return err
 	}
 	cr := compute.ComputeRequest{
-		Prefix:           *r.prefix,
-		ID:               awsWindowsDedicatedID,
-		VPC:              vpc,
-		Subnet:           targetSubnet,
-		AMI:              ami,
-		UserDataAsBase64: userDataB64,
-		KeyResources:     keyResources,
-		SecurityGroups:   securityGroups,
-		InstaceTypes:     requiredInstanceTypes,
-		DiskSize:         &diskSize,
-		Airgap:           *r.airgap,
-		LB:               lb,
-		LBEIP:            lbEIP,
-		LBTargetGroups:   []int{22, 3389},
-		Spot:             *r.spot}
+		Prefix:         *r.prefix,
+		ID:             awsRHELDedicatedID,
+		VPC:            vpc,
+		Subnet:         targetSubnet,
+		AMI:            ami,
+		KeyResources:   keyResources,
+		SecurityGroups: securityGroups,
+		InstaceTypes:   r.allocationData.InstanceTypes,
+		DiskSize:       &diskSize,
+		LB:             lb,
+		LBEIP:          lbEIP,
+		LBTargetGroups: []int{22},
+		Spot:           *r.spot}
 	c, err := cr.NewCompute(ctx)
 	if err != nil {
 		return err
 	}
 	ctx.Export(fmt.Sprintf("%s-%s", *r.prefix, outputUsername),
-		pulumi.String(*r.amiUser))
-	ctx.Export(fmt.Sprintf("%s-%s", *r.prefix, outputUserPassword),
-		password.Result)
+		pulumi.String(amiUserDefault))
 	ctx.Export(fmt.Sprintf("%s-%s", *r.prefix, outputHost),
-		c.GetHostIP(!*r.airgap))
+		c.GetHostIP(true))
 	if len(*r.timeout) > 0 {
 		if err = serverless.OneTimeDelayedTask(ctx,
 			*r.allocationData.Region, *r.prefix,
-			awsWindowsDedicatedID,
+			awsRHELDedicatedID,
 			fmt.Sprintf("aws %s destroy --project-name %s --backed-url %s --serverless",
-				"windows",
+				"rhel",
 				maptContext.ProjectName(),
 				maptContext.BackedURL()),
 			*r.timeout); err != nil {
 			return err
 		}
 	}
-	return c.Readiness(ctx, command.CommandPing, *r.prefix, awsWindowsDedicatedID,
-		keyResources.PrivateKey, *r.amiUser, bastion, []pulumi.Resource{})
+	return c.Readiness(ctx, command.CommandPing, *r.prefix, awsRHELDedicatedID,
+		keyResources.PrivateKey, amiUserDefault, nil, []pulumi.Resource{})
 }
 
 // Write exported values in context to files o a selected target folder
-func manageResults(stackResult auto.UpResult, prefix *string, airgap *bool) error {
+func (r *rhelAIRequest) manageResults(stackResult auto.UpResult) error {
 	results := map[string]string{
-		fmt.Sprintf("%s-%s", *prefix, outputUsername):       "username",
-		fmt.Sprintf("%s-%s", *prefix, outputUserPassword):   "userpassword",
-		fmt.Sprintf("%s-%s", *prefix, outputUserPrivateKey): "id_rsa",
-		fmt.Sprintf("%s-%s", *prefix, outputHost):           "host",
-	}
-	if *airgap {
-		err := bastion.WriteOutputs(stackResult, *prefix, maptContext.GetResultsOutputPath())
-		if err != nil {
-			return err
-		}
+		fmt.Sprintf("%s-%s", *r.prefix, outputUsername):       "username",
+		fmt.Sprintf("%s-%s", *r.prefix, outputUserPrivateKey): "id_rsa",
+		fmt.Sprintf("%s-%s", *r.prefix, outputHost):           "host",
 	}
 	return output.Write(stackResult, maptContext.GetResultsOutputPath(), results)
 }
 
 // security group for mac machine with ingress rules for ssh and vnc
-func securityGroups(ctx *pulumi.Context, prefix *string,
+func (r *rhelAIRequest) securityGroups(ctx *pulumi.Context,
 	vpc *ec2.Vpc) (pulumi.StringArray, error) {
 	// ingress for ssh access from 0.0.0.0
 	sshIngressRule := securityGroup.SSH_TCP
 	sshIngressRule.CidrBlocks = infra.NETWORKING_CIDR_ANY_IPV4
-	rdpIngressRule := securityGroup.RDP_TCP
-	rdpIngressRule.CidrBlocks = infra.NETWORKING_CIDR_ANY_IPV4
 	// Create SG with ingress rules
 	sg, err := securityGroup.SGRequest{
-		Name:        resourcesUtil.GetResourceName(*prefix, awsWindowsDedicatedID, "sg"),
+		Name:        resourcesUtil.GetResourceName(*r.prefix, awsRHELDedicatedID, "sg"),
 		VPC:         vpc,
-		Description: fmt.Sprintf("sg for %s", awsWindowsDedicatedID),
+		Description: fmt.Sprintf("sg for %s", awsRHELDedicatedID),
 		IngressRules: []securityGroup.IngressRules{
-			sshIngressRule, rdpIngressRule},
+			sshIngressRule},
 	}.Create(ctx)
 	if err != nil {
 		return nil, err
@@ -351,6 +269,3 @@ func securityGroups(ctx *pulumi.Context, prefix *string,
 		})
 	return pulumi.StringArray(sgs[:]), nil
 }
-
-// Need to add custom listener for RDP or should we use 22 tunneling through the bastion?
-// func addCustomListeners(){}

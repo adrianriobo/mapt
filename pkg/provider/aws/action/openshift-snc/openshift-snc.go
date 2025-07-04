@@ -11,6 +11,7 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/redhat-developer/mapt/pkg/manager"
 	maptContext "github.com/redhat-developer/mapt/pkg/manager/context"
+	cr "github.com/redhat-developer/mapt/pkg/provider/api/compute-request"
 	"github.com/redhat-developer/mapt/pkg/provider/aws"
 	awsConstants "github.com/redhat-developer/mapt/pkg/provider/aws/constants"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/data"
@@ -25,7 +26,6 @@ import (
 	"github.com/redhat-developer/mapt/pkg/provider/aws/services/ec2/keypair"
 	securityGroup "github.com/redhat-developer/mapt/pkg/provider/aws/services/ec2/security-group"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/services/ssm"
-	"github.com/redhat-developer/mapt/pkg/provider/util/instancetypes"
 	"github.com/redhat-developer/mapt/pkg/provider/util/output"
 	"github.com/redhat-developer/mapt/pkg/provider/util/security"
 	"github.com/redhat-developer/mapt/pkg/util"
@@ -34,13 +34,13 @@ import (
 )
 
 type OpenshiftSNCArgs struct {
-	Prefix          string
-	InstanceRequest instancetypes.InstanceRequest
-	Version         string
-	Arch            string
-	PullSecretFile  string
-	Spot            bool
-	Timeout         string
+	Prefix         string
+	ComputeRequest *cr.ComputeRequestArgs
+	Version        string
+	Arch           string
+	PullSecretFile string
+	Spot           bool
+	Timeout        string
 }
 
 type openshiftSNCRequest struct {
@@ -61,7 +61,8 @@ func Create(ctx *maptContext.ContextArgs, args *OpenshiftSNCArgs) error {
 		return err
 	}
 	// Get instance types matching requirements
-	instanceTypes, err := args.InstanceRequest.GetMachineTypes()
+	instanceTypes, err :=
+		data.NewComputeSelector().Select(args.ComputeRequest)
 	if err != nil {
 		return err
 	}

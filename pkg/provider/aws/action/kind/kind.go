@@ -10,8 +10,10 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 	"github.com/redhat-developer/mapt/pkg/manager"
 	maptContext "github.com/redhat-developer/mapt/pkg/manager/context"
+	cr "github.com/redhat-developer/mapt/pkg/provider/api/compute-request"
 	"github.com/redhat-developer/mapt/pkg/provider/aws"
 	awsConstants "github.com/redhat-developer/mapt/pkg/provider/aws/constants"
+	"github.com/redhat-developer/mapt/pkg/provider/aws/data"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/allocation"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/ec2/compute"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/network"
@@ -22,7 +24,6 @@ import (
 	securityGroup "github.com/redhat-developer/mapt/pkg/provider/aws/services/ec2/security-group"
 	kindCloudConfig "github.com/redhat-developer/mapt/pkg/provider/util/cloud-config/kind"
 	"github.com/redhat-developer/mapt/pkg/provider/util/command"
-	"github.com/redhat-developer/mapt/pkg/provider/util/instancetypes"
 	"github.com/redhat-developer/mapt/pkg/provider/util/output"
 	"github.com/redhat-developer/mapt/pkg/util"
 	"github.com/redhat-developer/mapt/pkg/util/logging"
@@ -30,12 +31,12 @@ import (
 )
 
 type KindArgs struct {
-	Prefix          string
-	InstanceRequest instancetypes.InstanceRequest
-	Version         string
-	Arch            string
-	Spot            bool
-	Timeout         string
+	Prefix         string
+	ComputeRequest *cr.ComputeRequestArgs
+	Version        string
+	Arch           string
+	Spot           bool
+	Timeout        string
 }
 
 type kindRequest struct {
@@ -55,7 +56,8 @@ func Create(ctx *maptContext.ContextArgs, args *KindArgs) error {
 		return err
 	}
 	// Get instance types matching requirements
-	instanceTypes, err := args.InstanceRequest.GetMachineTypes()
+	instanceTypes, err :=
+		data.NewComputeSelector().Select(args.ComputeRequest)
 	if err != nil {
 		return err
 	}

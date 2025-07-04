@@ -1,4 +1,4 @@
-package azure
+package data
 
 import (
 	"bytes"
@@ -10,13 +10,13 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
-	"github.com/redhat-developer/mapt/pkg/provider/azure/data"
+	spotTypes "github.com/redhat-developer/mapt/pkg/provider/api/spot/types"
 	"github.com/redhat-developer/mapt/pkg/util"
 	"github.com/redhat-developer/mapt/pkg/util/logging"
-	"golang.org/x/exp/maps"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
 )
 
 const (
@@ -45,7 +45,7 @@ type BestSpotChoiceRequest struct {
 	VMTypes               []string
 	OSType                string
 	EvictionRateTolerance EvictionRate
-	ImageRef              data.ImageReference
+	ImageRef              ImageReference
 	ExcludedRegions       []string
 }
 
@@ -83,10 +83,56 @@ var evictionRates = map[string]evictionRateSpec{
 	"highest": {Highest, "highest", 4, "20+"},
 }
 
+type SpotSelector struct{}
+
+func NewSpotSelector() *SpotSelector { return &SpotSelector{} }
+
+func (c *SpotSelector) Select(
+	args *spotTypes.SpotRequestArgs) (*spotTypes.SpotResults, error) {
+	return lowestPrice(args)
+}
+
+func lowestPrice(args *spotTypes.SpotRequestArgs) (*spotTypes.SpotResults, error) {
+	vms, err := NewComputeSelector().Select(args.ComputeRequest)
+	if err != nil {
+		return nil, nil
+	}
+	spr := BestSpotChoiceRequest{
+		VMTypes:               vms,
+		OSType:                osType(args.OS),
+		EvictionRateTolerance: EvictionRate(args.SpotTolerance),
+	}
+
+	prices, err := GetBestSpotChoice(spr)
+	if err != nil {
+		return nil, err
+	}
+	return &spotTypes.SpotResults{
+		ComputeType: prices.VMType,
+		Region:      prices.Location,
+		Price:       float32(prices.Price),
+	}, nil
+}
+
+func osType(os *string) string {
+	switch *os {
+	case "fedora", "RHEL", "rhel", "ubuntu":
+		return "linux"
+	case "windows", "Windows":
+		return "windows"
+	default:
+		return ""
+	}
+}
+
 // var ErrEvictionRatesEmtpyData = fmt.Errorf("error eviction rates are returning empty")
 
 // This function will return the best spot option
 func GetBestSpotChoice(r BestSpotChoiceRequest) (*BestSpotChoiceResponse, error) {
+	// TODO REVIEW THIS
+	if r.EvictionRateTolerance == 0 {
+		r.EvictionRateTolerance = DefaultEvictionRate
+	}
 	client, err := getGraphClient()
 	if err != nil {
 		return nil, fmt.Errorf("error getting the best spot price choice: %v", err)
@@ -234,13 +280,13 @@ func getBestSpotChoice(s []priceHistory, e []evictionRate, currentERT EvictionRa
 		// and pick one randomly to improve distribution of instances
 		// across locations
 		if ok && er == getEvictionRateValue(currentERT) {
-			ir := data.ImageRequest{
+			ir := ImageRequest{
 				Region: sv.Location,
-				ImageReference: data.ImageReference{
+				ImageReference: ImageReference{
 					ID: imageID,
 				},
 			}
-			if data.IsImageOffered(ir) {
+			if IsImageOffered(ir) {
 				spotChoices = append(spotChoices,
 					&BestSpotChoiceResponse{
 						VMType:   sv.VMType,
@@ -271,7 +317,10 @@ func getBestSpotChoice(s []priceHistory, e []evictionRate, currentERT EvictionRa
 // if there is a higher rate it returns its value and true
 // if the current is the highest it returns nil and false
 func getHigherEvictionRate(current EvictionRate) (*EvictionRate, bool) {
-	ers := maps.Values(evictionRates)
+	var ers []evictionRateSpec
+	for _, er := range evictionRates {
+		ers = append(ers, er)
+	}
 	sort.Slice(ers, func(i, j int) bool { return ers[i].order < ers[j].order })
 	i := slices.IndexFunc(ers, func(e evictionRateSpec) bool {
 		return e.id == current
@@ -284,7 +333,10 @@ func getHigherEvictionRate(current EvictionRate) (*EvictionRate, bool) {
 
 // Translate eviction rate to value
 func getEvictionRateValue(er EvictionRate) string {
-	ers := maps.Values(evictionRates)
+	var ers []evictionRateSpec
+	for _, er := range evictionRates {
+		ers = append(ers, er)
+	}
 	i := slices.IndexFunc(
 		ers,
 		func(e evictionRateSpec) bool {
@@ -305,13 +357,13 @@ func ParseEvictionRate(str string) (EvictionRate, bool) {
 func getSpotChoiceByPrice(s []priceHistory, imageID string) (*BestSpotChoiceResponse, error) {
 	var spotChoices []*BestSpotChoiceResponse
 	for _, sv := range s {
-		ir := data.ImageRequest{
+		ir := ImageRequest{
 			Region: sv.Location,
-			ImageReference: data.ImageReference{
+			ImageReference: ImageReference{
 				ID: imageID,
 			},
 		}
-		if data.IsImageOffered(ir) {
+		if IsImageOffered(ir) {
 			spotChoices = append(spotChoices,
 				&BestSpotChoiceResponse{
 					VMType:   sv.VMType,

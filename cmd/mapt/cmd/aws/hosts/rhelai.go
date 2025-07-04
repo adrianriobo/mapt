@@ -3,10 +3,8 @@ package hosts
 import (
 	awsParams "github.com/redhat-developer/mapt/cmd/mapt/cmd/aws/constants"
 	"github.com/redhat-developer/mapt/cmd/mapt/cmd/params"
-	"github.com/redhat-developer/mapt/pkg/integrations/cirrus"
-	"github.com/redhat-developer/mapt/pkg/integrations/github"
 	maptContext "github.com/redhat-developer/mapt/pkg/manager/context"
-	"github.com/redhat-developer/mapt/pkg/provider/aws/action/rhel"
+	rhelai "github.com/redhat-developer/mapt/pkg/provider/aws/action/rhel-ai"
 	"github.com/redhat-developer/mapt/pkg/util/logging"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -14,14 +12,14 @@ import (
 )
 
 const (
-	cmdRHEL     = "rhel"
-	cmdRHELDesc = "manage rhel dedicated host"
+	cmdRHELAI     = "rhel-ai"
+	cmdRHELAIDesc = "manage rhel ai host"
 )
 
-func GetRHELCmd() *cobra.Command {
+func GetRHELAICmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:   cmdRHEL,
-		Short: cmdRHELDesc,
+		Use:   cmdRHELAI,
+		Short: cmdRHELAIDesc,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := viper.BindPFlags(cmd.Flags()); err != nil {
 				return err
@@ -30,15 +28,15 @@ func GetRHELCmd() *cobra.Command {
 		},
 	}
 
-	flagSet := pflag.NewFlagSet(cmdRHEL, pflag.ExitOnError)
+	flagSet := pflag.NewFlagSet(cmdRHELAI, pflag.ExitOnError)
 	params.AddCommonFlags(flagSet)
 	c.PersistentFlags().AddFlagSet(flagSet)
 
-	c.AddCommand(getRHELCreate(), getRHELDestroy())
+	c.AddCommand(getRHELAICreate(), getRHELAIDestroy())
 	return c
 }
 
-func getRHELCreate() *cobra.Command {
+func getRHELAICreate() *cobra.Command {
 	c := &cobra.Command{
 		Use:   params.CreateCmdName,
 		Short: params.CreateCmdName,
@@ -57,41 +55,16 @@ func getRHELCreate() *cobra.Command {
 				Tags:                  viper.GetStringMapString(params.Tags),
 			}
 
-			if viper.IsSet(params.CirrusPWToken) {
-				ctx.CirrusPWArgs = &cirrus.PersistentWorkerArgs{
-					Token:    viper.GetString(params.CirrusPWToken),
-					Labels:   viper.GetStringMapString(params.CirrusPWLabels),
-					Platform: &cirrus.Linux,
-					Arch: params.LinuxArchAsCirrusArch(
-						viper.GetString(params.LinuxArch)),
-				}
-			}
-
-			if viper.IsSet(params.GHActionsRunnerToken) {
-				ctx.GHRunnerArgs = &github.GithubRunnerArgs{
-					Token:    viper.GetString(params.GHActionsRunnerToken),
-					RepoURL:  viper.GetString(params.GHActionsRunnerRepo),
-					Labels:   viper.GetStringSlice(params.GHActionsRunnerLabels),
-					Platform: &github.Linux,
-					Arch: params.LinuxArchAsGithubActionsArch(
-						viper.GetString(params.LinuxArch)),
-				}
-			}
-
 			// Run create
-			if err := rhel.Create(
+			if err := rhelai.Create(
 				ctx,
-				&rhel.RHELArgs{
+				&rhelai.RHELAIArgs{
 					Prefix:         "main",
-					Version:        viper.GetString(params.RhelVersion),
-					Arch:           viper.GetString(params.LinuxArch),
-					ComputeRequest: params.GetComputeRequest(),
 					SubsUsername:   viper.GetString(params.SubsUsername),
 					SubsUserpass:   viper.GetString(params.SubsUserpass),
-					ProfileSNC:     viper.IsSet(params.ProfileSNC),
+					ComputeRequest: params.GetComputeRequest(),
 					Spot:           viper.IsSet(awsParams.Spot),
 					Timeout:        viper.GetString(params.Timeout),
-					Airgap:         viper.IsSet(airgap),
 				}); err != nil {
 				logging.Error(err)
 			}
@@ -101,23 +74,17 @@ func getRHELCreate() *cobra.Command {
 	flagSet := pflag.NewFlagSet(params.CreateCmdName, pflag.ExitOnError)
 	flagSet.StringP(params.ConnectionDetailsOutput, "", "", params.ConnectionDetailsOutputDesc)
 	flagSet.StringToStringP(params.Tags, "", nil, params.TagsDesc)
-	flagSet.StringP(params.RhelVersion, "", params.RhelVersionDefault, params.RhelVersionDesc)
-	flagSet.StringP(params.LinuxArch, "", params.LinuxArchDefault, params.LinuxArchDesc)
 	flagSet.StringP(params.SubsUsername, "", "", params.SubsUsernameDesc)
 	flagSet.StringP(params.SubsUserpass, "", "", params.SubsUserpassDesc)
-	flagSet.Bool(airgap, false, airgapDesc)
 	flagSet.Bool(awsParams.Spot, false, awsParams.SpotDesc)
 	flagSet.IntP(params.SpotPriceIncreaseRate, "", params.SpotPriceIncreaseRateDefault, params.SpotPriceIncreaseRateDesc)
 	flagSet.StringP(params.Timeout, "", "", params.TimeoutDesc)
-	flagSet.Bool(params.ProfileSNC, false, params.ProfileSNCDesc)
-	flagSet.AddFlagSet(params.GetGHActionsFlagset())
-	params.AddCirrusFlags(flagSet)
 	flagSet.AddFlagSet(params.GetCpusAndMemoryFlagset())
 	c.PersistentFlags().AddFlagSet(flagSet)
 	return c
 }
 
-func getRHELDestroy() *cobra.Command {
+func getRHELAIDestroy() *cobra.Command {
 	c := &cobra.Command{
 		Use:   params.DestroyCmdName,
 		Short: params.DestroyCmdName,
@@ -126,7 +93,7 @@ func getRHELDestroy() *cobra.Command {
 				return err
 			}
 
-			if err := rhel.Destroy(&maptContext.ContextArgs{
+			if err := rhelai.Destroy(&maptContext.ContextArgs{
 				ProjectName: viper.GetString(params.ProjectName),
 				BackedURL:   viper.GetString(params.BackedURL),
 				Debug:       viper.IsSet(params.Debug),

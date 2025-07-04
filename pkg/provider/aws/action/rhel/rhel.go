@@ -9,8 +9,10 @@ import (
 	"github.com/redhat-developer/mapt/pkg/manager"
 	maptContext "github.com/redhat-developer/mapt/pkg/manager/context"
 	infra "github.com/redhat-developer/mapt/pkg/provider"
+	cr "github.com/redhat-developer/mapt/pkg/provider/api/compute-request"
 	"github.com/redhat-developer/mapt/pkg/provider/aws"
 	awsConstants "github.com/redhat-developer/mapt/pkg/provider/aws/constants"
+	"github.com/redhat-developer/mapt/pkg/provider/aws/data"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/allocation"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/bastion"
 	"github.com/redhat-developer/mapt/pkg/provider/aws/modules/ec2/compute"
@@ -22,7 +24,6 @@ import (
 	securityGroup "github.com/redhat-developer/mapt/pkg/provider/aws/services/ec2/security-group"
 	cloudConfigRHEL "github.com/redhat-developer/mapt/pkg/provider/util/cloud-config/rhel"
 	"github.com/redhat-developer/mapt/pkg/provider/util/command"
-	"github.com/redhat-developer/mapt/pkg/provider/util/instancetypes"
 	"github.com/redhat-developer/mapt/pkg/provider/util/output"
 	"github.com/redhat-developer/mapt/pkg/util"
 	"github.com/redhat-developer/mapt/pkg/util/logging"
@@ -30,15 +31,15 @@ import (
 )
 
 type RHELArgs struct {
-	Prefix          string
-	Version         string
-	Arch            string
-	InstanceRequest instancetypes.InstanceRequest
-	SubsUsername    string
-	SubsUserpass    string
-	ProfileSNC      bool
-	Spot            bool
-	Airgap          bool
+	Prefix         string
+	Version        string
+	Arch           string
+	ComputeRequest *cr.ComputeRequestArgs
+	SubsUsername   string
+	SubsUserpass   string
+	ProfileSNC     bool
+	Spot           bool
+	Airgap         bool
 	// If timeout is set a severless scheduled task will be created to self destroy the resources
 	Timeout string
 }
@@ -70,7 +71,8 @@ func Create(ctx *maptContext.ContextArgs, args *RHELArgs) error {
 		return err
 	}
 	// Get instance types matching requirements
-	instanceTypes, err := args.InstanceRequest.GetMachineTypes()
+	instanceTypes, err :=
+		data.NewComputeSelector().Select(args.ComputeRequest)
 	if err != nil {
 		return err
 	}

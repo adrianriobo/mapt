@@ -1,9 +1,12 @@
-package constants
+package params
 
 import (
 	"github.com/redhat-developer/mapt/pkg/integrations/cirrus"
 	"github.com/redhat-developer/mapt/pkg/integrations/github"
+	cr "github.com/redhat-developer/mapt/pkg/provider/api/compute-request"
+	"github.com/redhat-developer/mapt/pkg/util"
 	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
 
 const (
@@ -50,6 +53,10 @@ const (
 	MemoryDesc                  string = "Amount of RAM for the cloud instance in GiB"
 	CPUs                        string = "cpus"
 	CPUsDesc                    string = "Number of CPUs for the cloud instance"
+	GPUs                        string = "gpus"
+	GPUsDesc                    string = "Number of GPUs for the cloud instance"
+	GPUManufacturer             string = "gpu-manufacturer"
+	GPUManufacturerDesc         string = "Manufacturer company name for GPU. (i.e. NVIDIA)"
 	NestedVirt                  string = "nested-virt"
 	NestedVirtDesc              string = "Use cloud instance that has nested virtualization support"
 
@@ -109,9 +116,23 @@ func GetGHActionsFlagset() *pflag.FlagSet {
 func GetCpusAndMemoryFlagset() *pflag.FlagSet {
 	flagSet := pflag.NewFlagSet(CreateCmdName, pflag.ExitOnError)
 	flagSet.Int32P(CPUs, "", 8, CPUsDesc)
+	flagSet.Int32P(GPUs, "", 8, GPUsDesc)
+	flagSet.StringP(GPUManufacturer, "", "", GPUManufacturerDesc)
 	flagSet.Int32P(Memory, "", 64, MemoryDesc)
 	flagSet.BoolP(NestedVirt, "", false, NestedVirtDesc)
 	return flagSet
+}
+
+func GetComputeRequest() *cr.ComputeRequestArgs {
+	return &cr.ComputeRequestArgs{
+		CPUs:            viper.GetInt32(CPUs),
+		GPUs:            viper.GetInt32(GPUs),
+		GPUManufacturer: viper.GetString(GPUManufacturer),
+		MemoryGib:       viper.GetInt32(Memory),
+		Arch: util.If(viper.GetString(LinuxArch) == "arm64",
+			cr.Arm64, cr.Amd64),
+		NestedVirt: viper.GetBool(ProfileSNC) || viper.GetBool(NestedVirt),
+	}
 }
 
 func AddCommonFlags(fs *pflag.FlagSet) {
