@@ -80,6 +80,10 @@ build: $(BUILD_DIR)/mapt
 
 .PHONY: test
 test:
+	GOMAXPROCS=1 CGO_ENABLED=1 go test -p 1 --tags build -v -ldflags="$(VERSION_VARIABLES)" ./pkg/... ./cmd/... -skip github.com/mapt-oss/pulumi-ibmcloud/sdk/go/...
+
+.PHONY: test-race
+test-race:
 	CGO_ENABLED=1 go test -race --tags build -v -ldflags="$(VERSION_VARIABLES)" ./pkg/... ./cmd/...
 
 .PHONY: clean ## Remove all build artifacts
@@ -94,12 +98,11 @@ fmt:
 # Run golangci-lint against code
 .PHONY: lint 
 lint: $(TOOLS_BINDIR)/golangci-lint
-	"$(TOOLS_BINDIR)"/golangci-lint run -v 
+	"$(TOOLS_BINDIR)"/golangci-lint run -v --skip-dirs vendor
 
 .PHONY: renovate-check
 renovate-check:
 	${CONTAINER_MANAGER} run --rm -v ${PWD}:/repo docker.io/renovate/renovate:latest renovate-config-validator /repo/renovate.json
-	 
 
 # Build the container image
 .PHONY: oci-build

@@ -121,6 +121,14 @@ const (
 	KeepState        string = "keep-state"
 	KeepStateDesc    string = "keep Pulumi state files in backend storage after successful destroy (by default, state files are removed)"
 
+	// IBM Cloud
+	SubnetID        string = "subnet-id"
+	SubnetIDDesc    string = "ID of an existing VPC subnet to deploy the instance into"
+	NetworkID       string = "network-id"
+	NetworkIDDesc   string = "ID of an existing Power VS network to attach the instance to"
+	WorkspaceID     string = "workspace-id"
+	WorkspaceIDDesc string = "ID of an existing Power VS workspace (cloud instance) that owns the network"
+
 	// Kind
 	KindCmd                   = "kind"
 	KindCmdDesc               = "Manage a Kind cluster. This is not intended for production use"
