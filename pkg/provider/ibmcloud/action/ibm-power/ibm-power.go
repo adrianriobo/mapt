@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/mapt-oss/pulumi-ibmcloud/sdk/go/ibmcloud"
+	"github.com/pulumi/pulumi-command/sdk/go/command/remote"
 	"github.com/pulumi/pulumi-tls/sdk/v5/go/tls"
 	"github.com/pulumi/pulumi/sdk/v3/go/auto"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
@@ -11,6 +12,7 @@ import (
 	mc "github.com/redhat-developer/mapt/pkg/manager/context"
 	ibmcloudp "github.com/redhat-developer/mapt/pkg/provider/ibmcloud"
 	icdata "github.com/redhat-developer/mapt/pkg/provider/ibmcloud/data"
+	"github.com/redhat-developer/mapt/pkg/provider/util/command"
 	"github.com/redhat-developer/mapt/pkg/provider/util/output"
 	"github.com/redhat-developer/mapt/pkg/util"
 	"github.com/redhat-developer/mapt/pkg/util/logging"
@@ -23,8 +25,8 @@ const (
 	outputUsername       = "alsUsername"
 	outputUserPrivateKey = "alsUserPrivatekey"
 
-	imageRHEL9   = "RHEL9-SP6"
-	defaultUser  = "root"
+	imageRHEL9  = "RHEL9-SP6"
+	defaultUser = "root"
 
 	// Standard large build-host sizing on an s922 frame with shared processors and tier1 SSD.
 	instanceMemory      = 256.0
@@ -96,6 +98,7 @@ func (r *pwRequest) deploy(ctx *pulumi.Context) error {
 		return err
 	}
 	ctx.Export(fmt.Sprintf("%s-%s", *r.prefix, outputUserPrivateKey), pk.PrivateKeyPem)
+
 	imageId, err := icdata.GetImage(r.mCtx,
 		&icdata.PiImageArgs{
 			CloudInstanceId: r.workspaceID,
@@ -104,6 +107,19 @@ func (r *pwRequest) deploy(ctx *pulumi.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// pub-vlan network provides a public IP and outbound internet access.
+	pubNet, err := ibmcloud.NewPiNetwork(ctx,
+		resourcesUtil.GetResourceName(*r.prefix, stackIBMPowerVS, "pubnet"),
+		&ibmcloud.PiNetworkArgs{
+			PiCloudInstanceId: pulumi.String(r.workspaceID),
+			PiNetworkName:     pulumi.String(fmt.Sprintf("%s-%s-public", *r.prefix, r.mCtx.ProjectName())),
+			PiNetworkType:     pulumi.String("pub-vlan"),
+		})
+	if err != nil {
+		return err
+	}
+
 	i, err := ibmcloud.NewPiInstance(ctx,
 		resourcesUtil.GetResourceName(*r.prefix, stackIBMPowerVS, "pii"),
 		&ibmcloud.PiInstanceArgs{
@@ -118,30 +134,50 @@ func (r *pwRequest) deploy(ctx *pulumi.Context) error {
 			PiStorageType:     pulumi.String(instanceStorageType),
 			PiKeyPairName:     pki.PiKeyName,
 			PiNetworks: ibmcloud.PiInstancePiNetworkArray{
+				// private network: internal connectivity via Transit Gateway
 				&ibmcloud.PiInstancePiNetworkArgs{
 					NetworkId: pulumi.String(r.networkID),
+				},
+				// public network: internet access (GitLab, package repos, etc.) and SSH
+				&ibmcloud.PiInstancePiNetworkArgs{
+					NetworkId: pubNet.NetworkId,
 				},
 			},
 		})
 	if err != nil {
 		return err
 	}
+
 	ctx.Export(fmt.Sprintf("%s-%s", *r.prefix, outputUsername), pulumi.String(defaultUser))
-	// Use ExternalIp when available (public network); fall back to IpAddress for private networks.
-	ctx.Export(fmt.Sprintf("%s-%s", *r.prefix, outputHost),
-		i.PiNetworks.ApplyT(func(networks []ibmcloud.PiInstancePiNetwork) (string, error) {
-			if len(networks) == 0 {
-				return "", fmt.Errorf("instance has no network interfaces")
+
+	// ExternalIp is only set on the pub-vlan interface.
+	publicIP := i.PiNetworks.ApplyT(func(networks []ibmcloud.PiInstancePiNetwork) (string, error) {
+		for _, n := range networks {
+			if n.ExternalIp != nil && *n.ExternalIp != "" {
+				return *n.ExternalIp, nil
 			}
-			if networks[0].ExternalIp != nil && *networks[0].ExternalIp != "" {
-				return *networks[0].ExternalIp, nil
-			}
-			if networks[0].IpAddress != nil && *networks[0].IpAddress != "" {
-				return *networks[0].IpAddress, nil
-			}
-			return "", fmt.Errorf("instance network has no IP address")
-		}).(pulumi.StringOutput))
-	return nil
+		}
+		return "", fmt.Errorf("no public IP found on instance — is the pub-vlan network attached?")
+	}).(pulumi.StringOutput)
+
+	ctx.Export(fmt.Sprintf("%s-%s", *r.prefix, outputHost), publicIP)
+
+	_, err = remote.NewCommand(ctx,
+		resourcesUtil.GetResourceName(*r.prefix, stackIBMPowerVS, "readiness-cmd"),
+		&remote.CommandArgs{
+			Connection: remote.ConnectionArgs{
+				Host:       publicIP,
+				User:       pulumi.String(defaultUser),
+				PrivateKey: pk.PrivateKeyOpenssh,
+			},
+			Create: pulumi.String(command.CommandPing),
+			Update: pulumi.String(command.CommandPing),
+		}, pulumi.Timeouts(
+			&pulumi.CustomTimeouts{
+				Create: command.RemoteTimeout,
+				Update: command.RemoteTimeout}),
+		pulumi.DependsOn([]pulumi.Resource{i}))
+	return err
 }
 
 // piKey creates a 4096-bit RSA TLS key pair and registers the public key as a
