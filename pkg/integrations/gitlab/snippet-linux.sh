@@ -72,6 +72,7 @@ sudo gitlab-runner register \
   --non-interactive \
   --url "{{ .RepoURL }}" \
   --token "{{ .Token }}" \
+  --name "{{ .Name }}" \
   --executor "docker" \
   --docker-image "fedora:latest" \
   --docker-host "unix:///run/podman/podman.sock" \
