@@ -14,6 +14,58 @@ sudo restorecon -v /usr/bin/gitlab-runner 2>/dev/null || true
 # Enable Podman socket so the docker executor can reach it
 sudo systemctl enable --now podman.socket
 
+# Detect the host's upstream DNS servers and propagate them into every Podman
+# container (including nested build containers created by `podman build`).
+# Without this, inner build containers inherit a loopback stub address
+# (127.0.0.53 / systemd-resolved) that is unreachable from inside a container,
+# causing DNS resolution failures like "Could not resolve host: github.com".
+_dns_servers=""
+if command -v resolvectl &>/dev/null; then
+    _dns_servers=$(resolvectl dns 2>/dev/null \
+        | awk '{for(i=2;i<=NF;i++) print $i}' \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' \
+        | sort -u | tr '\n' ' ' | xargs)
+fi
+if [ -z "$_dns_servers" ] && command -v nmcli &>/dev/null; then
+    _dns_servers=$(nmcli dev show 2>/dev/null \
+        | awk '/IP4\.DNS/ {print $2}' \
+        | tr '\n' ' ' | xargs)
+fi
+if [ -z "$_dns_servers" ]; then
+    _dns_servers=$(awk '/^nameserver/ && $2 !~ /^127\./ {print $2}' /etc/resolv.conf \
+        | tr '\n' ' ' | xargs)
+fi
+if [ -n "$_dns_servers" ]; then
+    _toml_list=""
+    for _ip in $_dns_servers; do
+        [ -n "$_toml_list" ] && _toml_list="${_toml_list}, "
+        _toml_list="${_toml_list}\"${_ip}\""
+    done
+    sudo mkdir -p /etc/containers
+    if [ ! -f /etc/containers/containers.conf ]; then
+        printf '[containers]\ndns_servers = [%s]\n' "$_toml_list" \
+            | sudo tee /etc/containers/containers.conf > /dev/null
+    elif grep -q '^\[containers\]' /etc/containers/containers.conf; then
+        # Scope the dns_servers check to the [containers] section only
+        if awk '/^\[containers\]/{f=1;next} /^\[/{f=0} f && /^dns_servers/{found=1} END{exit !found}' \
+                /etc/containers/containers.conf; then
+            # Replace dns_servers only within [containers]
+            awk -v "val=dns_servers = [${_toml_list}]" \
+                '/^\[containers\]/{s=1} /^\[/ && !/^\[containers\]/{s=0}
+                 s && /^dns_servers/{$0=val} 1' \
+                /etc/containers/containers.conf \
+                | sudo tee /etc/containers/containers.conf.tmp > /dev/null \
+                && sudo mv /etc/containers/containers.conf.tmp /etc/containers/containers.conf
+        else
+            sudo sed -i "/^\[containers\]/a dns_servers = [${_toml_list}]" \
+                /etc/containers/containers.conf
+        fi
+    else
+        printf '\n[containers]\ndns_servers = [%s]\n' "$_toml_list" \
+            | sudo tee -a /etc/containers/containers.conf > /dev/null
+    fi
+fi
+
 # Register runner using docker executor backed by Podman
 # --docker-privileged is required for Podman: containers need CAP_SYS_ADMIN to mount /proc
 sudo gitlab-runner register \
