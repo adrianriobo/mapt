@@ -32,7 +32,7 @@ if [ -z "$_dns_servers" ] && command -v nmcli &>/dev/null; then
         | tr '\n' ' ' | xargs)
 fi
 if [ -z "$_dns_servers" ]; then
-    _dns_servers=$(awk '/^nameserver/ && $2 !~ /^127\./ {print $2}' /etc/resolv.conf \
+    _dns_servers=$(awk '/^nameserver/ && $2 !~ /^127\./ && $2 != "::1" {print $2}' /etc/resolv.conf \
         | tr '\n' ' ' | xargs)
 fi
 if [ -n "$_dns_servers" ]; then
@@ -65,6 +65,32 @@ if [ -n "$_dns_servers" ]; then
             | sudo tee -a /etc/containers/containers.conf > /dev/null
     fi
 fi
+
+{{- if .LogToJournald}}
+# Set journald as the container log driver so CI job output is captured by the
+# systemd journal and can be correlated with runner daemon logs via job_id.
+sudo mkdir -p /etc/containers
+if [ ! -f /etc/containers/containers.conf ]; then
+    printf '[containers]\nlog_driver = "journald"\n' \
+        | sudo tee /etc/containers/containers.conf > /dev/null
+elif grep -q '^\[containers\]' /etc/containers/containers.conf; then
+    if awk '/^\[containers\]/{f=1;next} /^\[/{f=0} f && /^log_driver/{found=1} END{exit !found}' \
+            /etc/containers/containers.conf; then
+        # Replace existing log_driver within [containers]
+        awk '/^\[containers\]/{s=1} /^\[/ && !/^\[containers\]/{s=0}
+             s && /^log_driver/{$0="log_driver = \"journald\""} 1' \
+            /etc/containers/containers.conf \
+            | sudo tee /etc/containers/containers.conf.tmp > /dev/null \
+            && sudo mv /etc/containers/containers.conf.tmp /etc/containers/containers.conf
+    else
+        sudo sed -i '/^\[containers\]/a log_driver = "journald"' \
+            /etc/containers/containers.conf
+    fi
+else
+    printf '\n[containers]\nlog_driver = "journald"\n' \
+        | sudo tee -a /etc/containers/containers.conf > /dev/null
+fi
+{{- end}}
 
 # Register runner using docker executor backed by Podman
 # --docker-privileged is required for Podman: containers need CAP_SYS_ADMIN to mount /proc

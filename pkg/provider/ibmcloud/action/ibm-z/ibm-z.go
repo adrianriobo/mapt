@@ -362,6 +362,7 @@ func (r *zRequest) buildUserDataInput() (pulumi.StringPtrInput, error) {
 	hasOtel := otelSet == 3
 	if r.glAuthToken != nil {
 		localArgs := *r.glRunnerArgsCopy
+		localArgs.LogToJournald = hasOtel
 		return r.glAuthToken.ApplyT(func(token string) (*string, error) {
 			localArgs.AuthToken = token
 			glSnippet, err := integrations.GetIntegrationSnippetAsCloudInitWritableFile(&localArgs, defaultUser)

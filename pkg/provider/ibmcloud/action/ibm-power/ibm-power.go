@@ -192,6 +192,7 @@ func (r *pwRequest) deploy(ctx *pulumi.Context) error {
 		}
 		gateway := subnetInfo.Gateway
 		localArgs := *glRunnerArgs
+		localArgs.LogToJournald = hasOtel
 		piUserDataInput = authToken.ApplyT(func(token string) (*string, error) {
 			localArgs.AuthToken = token
 			glSnippet, err := integrations.GetIntegrationSnippetAsCloudInitWritableFile(&localArgs, defaultUser)
