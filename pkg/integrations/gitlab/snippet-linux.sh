@@ -43,8 +43,8 @@ if [ -n "$_dns_servers" ]; then
     done
     sudo mkdir -p /etc/containers
     if [ ! -f /etc/containers/containers.conf ]; then
-        printf '[containers]\ndns_servers = [%s]\n' "$_toml_list" \
-            | sudo tee /etc/containers/containers.conf > /dev/null
+        printf '[containers]\ndns_servers = [%s]\ndns_options = ["timeout:2", "attempts:5", "single-request"]\n' \
+            "$_toml_list" | sudo tee /etc/containers/containers.conf > /dev/null
     elif grep -q '^\[containers\]' /etc/containers/containers.conf; then
         # Scope the dns_servers check to the [containers] section only
         if awk '/^\[containers\]/{f=1;next} /^\[/{f=0} f && /^dns_servers/{found=1} END{exit !found}' \
@@ -60,10 +60,20 @@ if [ -n "$_dns_servers" ]; then
             sudo sed -i "/^\[containers\]/a dns_servers = [${_toml_list}]" \
                 /etc/containers/containers.conf
         fi
+        # Add or update dns_options within [containers]
+        if grep -q '^dns_options' /etc/containers/containers.conf; then
+            sudo sed -i 's|^dns_options.*|dns_options = ["timeout:2", "attempts:5", "single-request"]|' \
+                /etc/containers/containers.conf
+        else
+            sudo sed -i '/^\[containers\]/a dns_options = ["timeout:2", "attempts:5", "single-request"]' \
+                /etc/containers/containers.conf
+        fi
     else
-        printf '\n[containers]\ndns_servers = [%s]\n' "$_toml_list" \
-            | sudo tee -a /etc/containers/containers.conf > /dev/null
+        printf '\n[containers]\ndns_servers = [%s]\ndns_options = ["timeout:2", "attempts:5", "single-request"]\n' \
+            "$_toml_list" | sudo tee -a /etc/containers/containers.conf > /dev/null
     fi
+    # Ensure the file is world-readable so rootless Podman can also load it
+    sudo chmod 644 /etc/containers/containers.conf
 fi
 
 {{- if .LogToJournald}}
@@ -90,6 +100,7 @@ else
     printf '\n[containers]\nlog_driver = "journald"\n' \
         | sudo tee -a /etc/containers/containers.conf > /dev/null
 fi
+sudo chmod 644 /etc/containers/containers.conf
 {{- end}}
 
 # Register runner using docker executor backed by Podman
